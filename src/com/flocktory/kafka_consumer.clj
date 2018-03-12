@@ -26,16 +26,16 @@
 (defn map-keys
   [f m]
   (persistent!
-    (reduce-kv (fn [res k v]
-                 (assoc! res (f k) v))
-               (transient {}) m)))
+    (reduce (fn [res e]
+              (assoc! res (f (key e)) (val e)))
+            (transient {}) m)))
 
 (defn map-vals
   [f m]
   (persistent!
-    (reduce-kv (fn [res k v]
-                 (assoc! res k (f v)))
-               (transient {}) m)))
+    (reduce (fn [res e]
+              (assoc! res (key e) (f (val e))))
+            (transient {}) m)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;;;;; TRACER UTILS ;;;;;;;
@@ -562,25 +562,29 @@
                           config-protocol/OPTIONAL_CONFIG_DEFAULTS)
         start-fn
         (fn []
-          (let [consumer (assoc consumer
-                           ::group-id (group-id consumer)
-                           ::kafka-consumer kafka-consumer
-                           ::kafka-consumer-config kafka-consumer-config
-                           ::optional-config optional-config
-                           ::running? running?
-                           ::current-offsets (atom {})
-                           ::pending-records (atom [])
-                           ::paused-partitions (atom #{})
-                           ::assigned-partitions (atom [])
-                           ::last-commit-timestamp (atom nil))
-                ;; make-transform-record-fn needs ::optional-config key in consumer
-                consumer (assoc consumer
-                           ::transform-record-fn (make-transform-record-fn consumer))
-                ;; make-consume-fn needs ::transform-fn key in consumer
-                consumer (assoc consumer
-                           ::consume-fn (make-consume-fn consumer))]
-            (trace-create-consumer consumer)
-            (start-consumer-thread consumer)))]
+          (try
+            (let [consumer (assoc consumer
+                             ::group-id (group-id consumer)
+                             ::kafka-consumer kafka-consumer
+                             ::kafka-consumer-config kafka-consumer-config
+                             ::optional-config optional-config
+                             ::running? running?
+                             ::current-offsets (atom {})
+                             ::pending-records (atom [])
+                             ::paused-partitions (atom #{})
+                             ::assigned-partitions (atom [])
+                             ::last-commit-timestamp (atom nil))
+                  ;; make-transform-record-fn needs ::optional-config key in consumer
+                  consumer (assoc consumer
+                             ::transform-record-fn (make-transform-record-fn consumer))
+                  ;; make-consume-fn needs ::transform-fn key in consumer
+                  consumer (assoc consumer
+                             ::consume-fn (make-consume-fn consumer))]
+              (trace-create-consumer consumer)
+              (start-consumer-thread consumer))
+            (catch Throwable t
+              (log/error t "Error in consumer thread")
+              (throw t))))]
     {:kafka-consumer kafka-consumer
      :consumer-thread-fn start-fn}))
 
