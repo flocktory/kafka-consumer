@@ -502,8 +502,7 @@
   (reify ConsumerRebalanceListener
     (onPartitionsRevoked [this topic-partitions]
       (commit-sync! consumer)
-      (->> topic-partitions
-           (map TopicPartition->map topic-partitions)
+      (->> (map TopicPartition->map topic-partitions)
            (notify-tracers tracer/IOnPartitionsRevoked
                            tracer/on-partitions-revoked
                            consumer)))
