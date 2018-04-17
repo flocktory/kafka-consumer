@@ -18,8 +18,7 @@ commit offsets manually. That's why this abstraction over java consumer API was 
 
 Add dependency to `project.clj`:
 
-```clojure
-[com.flocktory/kafka-consumer "0.0.2"]
-```
+[![Clojars Project](https://clojars.org/com.flocktory/kafka-consumer/latest-version.svg)](https://clojars.org/com.flocktory/kafka-consumer)
+
 
 See [getting started](https://github.com/flocktory/kafka-consumer/wiki/Getting-started) for more info.
