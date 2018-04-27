@@ -376,6 +376,28 @@
            (keep ::commit-record)
            (map partition-process-success)))))
 
+(defn manual-consume-fn
+  [consumer]
+  (fn [records]
+    (let [records-count (count records)]
+      (notify-tracers tracer/IBeforeConsume
+                      tracer/before-consume
+                      consumer records-count)
+      (let [result
+            (try
+              (manual-consumer-protocol/consume (cleanup-deps consumer) records)
+              (catch Exception catch-to-log
+                (notify-tracers tracer/IOnConsumeError
+                                tracer/on-consume-error
+                                consumer records-count catch-to-log)
+                (throw catch-to-log)))]
+        (notify-tracers tracer/IAfterConsume
+                        tracer/after-consume
+                        consumer records-count)
+        (->> result
+             ::commit-records
+             (map partition-process-success))))))
+
 (defn make-consume-fn
   ;;todo: validate consumer keys
   [consumer]
@@ -390,7 +412,10 @@
     (safe-consume-record-fn consumer)
 
     (satisfies? manual-consumer-protocol/IPartitionConsumer consumer)
-    (manual-consume-partition-fn consumer)))
+    (manual-consume-partition-fn consumer)
+
+    (satisfies? manual-consumer-protocol/IConsumer consumer)
+    (manual-consume-fn consumer)))
 
 (defn get-pending-records
   [partition-results]

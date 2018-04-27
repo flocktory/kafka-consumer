@@ -177,6 +177,47 @@
             offsets (kafka-consumer/get-new-offsets results)]
         (is (= {} offsets))))))
 
+(defrecord manual-consumer [consume-fn]
+  manual-consumer-protocol/IConsumer
+  (consume
+    [this records]
+    (consume-fn this records)))
+
+(deftest manual-consumer-test
+  (let [record1 {:topic "topic1"
+                 :partition 0
+                 :offset (rand-int Integer/MAX_VALUE)}
+        record2 {:topic "topic1"
+                 :partition 0
+                 :offset (rand-int Integer/MAX_VALUE)}
+        record3 {:topic "topic2"
+                 :partition 0
+                 :offset (rand-int Integer/MAX_VALUE)}]
+    (testing "all records processed"
+      (let [consumer (-> (fn [this records]
+                           {::kafka-consumer/commit-records
+                            (->> records
+                                 (group-by (juxt :topic :partition))
+                                 (vals)
+                                 (map last))})
+                         (->manual-consumer))
+            consume-fn (kafka-consumer/make-consume-fn consumer)
+            results (consume-fn [record1 record2 record3])]
+
+        (is (= {{:topic "topic1"
+                 :partition 0} (inc (:offset record2))
+                {:topic "topic2"
+                 :partition 0} (inc (:offset record3))}
+               (kafka-consumer/get-new-offsets results)))))
+    (testing "if nothing to commit"
+      (let [consumer (-> (fn [this records]
+                           :nothing-to-commit)
+                         (->manual-consumer))
+            consume-fn (kafka-consumer/make-consume-fn consumer)
+            results (consume-fn [record1 record2 record3])
+            offsets (kafka-consumer/get-new-offsets results)]
+        (is (= {} offsets))))))
+
 (deftest should-commit?-test
   (is (true? (kafka-consumer/should-commit? {::kafka-consumer/last-commit-timestamp (atom nil)}))))
 
