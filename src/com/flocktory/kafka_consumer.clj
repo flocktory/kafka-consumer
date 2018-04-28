@@ -68,10 +68,6 @@
   [consumer timestamp]
   (reset! (::last-commit-timestamp consumer) timestamp))
 
-(defn- reset-paused-partitions!
-  [consumer paused-partitions]
-  (reset! (::paused-partitions consumer) paused-partitions))
-
 (defn- reset-assigned-partitions!
   [consumer assigned-partitions]
   (reset! (::assigned-partitions consumer) assigned-partitions))
@@ -81,18 +77,16 @@
   (reset! (::pending-records consumer) pending-records))
 
 (defn update-consumer-state!
-  [consumer offsets paused-partitions pending-records]
+  [consumer offsets pending-records]
   (doto consumer
     (update-current-offsets! offsets)
-    (reset-paused-partitions! paused-partitions)
     (reset-pending-records! pending-records)))
 
 (defn- init-consumer-state!
   [consumer]
   (doto consumer
     (reset-offsets! {})
-    (reset-pending-records! [])
-    (reset-paused-partitions! #{})))
+    (reset-pending-records! [])))
 
 (defn- json-decode-strict [s] (json/decode-strict s true))
 
@@ -242,7 +236,7 @@
          (concat @pending-records))))
 
 (defn get-new-offsets
-  [results]
+  [{:keys [results]}]
   (reduce (fn [m {:keys [topic-partition offset]}]
             (assoc m topic-partition offset)) {} results))
 
@@ -284,69 +278,71 @@
                               tracer/on-consume-error
                               consumer records-count ex)
               ex))]
-      (->> records
-           (group-by-topic-partition)
-           (vals)
-           (map (if (instance? Exception maybe-exception)
-                  partition-process-fail
-                  (comp partition-process-success last)))))))
+      {:results (->> records
+                     (group-by-topic-partition)
+                     (vals)
+                     (map (if (instance? Exception maybe-exception)
+                            partition-process-fail
+                            (comp partition-process-success last))))})))
 
 (defn- safe-consume-partition-fn
   [consumer]
   (fn [records]
-    (->> records
-         (group-by-topic-partition)
-         (cp/pmap
-           :builtin
-           (fn [[topic-partition records]]
-             (let [records-count (count records)
-                   maybe-exception
-                   (try
-                     (notify-tracers tracer/IBeforeConsumePartition
-                                     tracer/before-consume-partition
-                                     consumer topic-partition records-count)
-                     (-> (cleanup-deps consumer)
-                         (consumer-protocol/consume-partition topic-partition records))
-                     (notify-tracers tracer/IAfterConsumePartition
-                                     tracer/after-consume-partition
-                                     consumer topic-partition records-count)
-                     (catch Exception ex
-                       (notify-tracers tracer/IOnConsumePartitionError
-                                       tracer/on-consume-partition-error
-                                       consumer topic-partition records-count ex)
-                       ex))]
-               (if (instance? Exception maybe-exception)
-                 (partition-process-fail records)
-                 (partition-process-success (last records)))))))))
+    {:results
+     (->> records
+          (group-by-topic-partition)
+          (cp/pmap
+            :builtin
+            (fn [[topic-partition records]]
+              (let [records-count (count records)
+                    maybe-exception
+                    (try
+                      (notify-tracers tracer/IBeforeConsumePartition
+                                      tracer/before-consume-partition
+                                      consumer topic-partition records-count)
+                      (-> (cleanup-deps consumer)
+                          (consumer-protocol/consume-partition topic-partition records))
+                      (notify-tracers tracer/IAfterConsumePartition
+                                      tracer/after-consume-partition
+                                      consumer topic-partition records-count)
+                      (catch Exception ex
+                        (notify-tracers tracer/IOnConsumePartitionError
+                                        tracer/on-consume-partition-error
+                                        consumer topic-partition records-count ex)
+                        ex))]
+                (if (instance? Exception maybe-exception)
+                  (partition-process-fail records)
+                  (partition-process-success (last records)))))))}))
 
 (defn- safe-consume-record-fn
   [consumer]
   (fn [records]
-    (->> records
-         (group-by-topic-partition)
-         (cp/pmap
-           :builtin
-           (fn [[topic-partition records]]
-             (loop [[record & rest-records :as records] records]
-               (let [result
-                     (try
-                       (notify-tracers tracer/IBeforeConsumeRecord
-                                       tracer/before-consume-record
-                                       consumer record)
-                       (consumer-protocol/consume-record (cleanup-deps consumer) record)
-                       (notify-tracers tracer/IAfterConsumeRecord
-                                       tracer/after-consume-record
-                                       consumer record)
-                       (catch Exception error
-                         (notify-tracers tracer/IOnConsumeRecordError
-                                         tracer/on-consume-record-error
-                                         consumer record error)
-                         error))]
-                 (if (instance? Throwable result)
-                   (partition-process-fail records)
-                   (if (and (seq rest-records) @(::running? consumer))
-                     (recur rest-records)
-                     (partition-process-success record))))))))))
+    {:results
+     (->> records
+          (group-by-topic-partition)
+          (cp/pmap
+            :builtin
+            (fn [[topic-partition records]]
+              (loop [[record & rest-records :as records] records]
+                (let [result
+                      (try
+                        (notify-tracers tracer/IBeforeConsumeRecord
+                                        tracer/before-consume-record
+                                        consumer record)
+                        (consumer-protocol/consume-record (cleanup-deps consumer) record)
+                        (notify-tracers tracer/IAfterConsumeRecord
+                                        tracer/after-consume-record
+                                        consumer record)
+                        (catch Exception error
+                          (notify-tracers tracer/IOnConsumeRecordError
+                                          tracer/on-consume-record-error
+                                          consumer record error)
+                          error))]
+                  (if (instance? Throwable result)
+                    (partition-process-fail records)
+                    (if (and (seq rest-records) @(::running? consumer))
+                      (recur rest-records)
+                      (partition-process-success record))))))))}))
 
 (defn- manual-consume-partition-fn
   [consumer]
@@ -370,11 +366,12 @@
                                 tracer/after-consume-partition
                                 consumer topic-partition records-count)
                 result)))]
-      (->> records
-           (group-by-topic-partition)
-           (cp/pmap :builtin pmap-fn)
-           (keep ::commit-record)
-           (map partition-process-success)))))
+      {:results
+       (->> records
+            (group-by-topic-partition)
+            (cp/pmap :builtin pmap-fn)
+            (keep ::commit-record)
+            (map partition-process-success))})))
 
 (defn manual-consume-fn
   [consumer]
@@ -395,10 +392,12 @@
                         tracer/after-consume
                         consumer records-count)
         (if-let [failed-records (::failed-records result)]
-          (map (partial partition-process-result false) failed-records)
-          (->> result
-               ::commit-records
-               (map partition-process-success)))))))
+          {:pause-assigned-partitions (::pause-assigned-partitions result)
+           :results (map (partial partition-process-result false) failed-records)}
+          {:resume-assigned-partitions (::resume-assigned-partitions result)
+           :results (->> result
+                         ::commit-records
+                         (map partition-process-success))})))))
 
 (defn make-consume-fn
   ;;todo: validate consumer keys
@@ -420,26 +419,30 @@
     (manual-consume-fn consumer)))
 
 (defn get-pending-records
-  [partition-results]
-  (->> partition-results
+  [{:keys [results]}]
+  (->> results
        (remove :status)
        (mapcat :pending-records)))
 
 (defn get-partitions-to-pause
-  [results paused-partitions]
-  (set/difference (->> results
-                       (remove :status)
-                       (map :topic-partition)
-                       (set))
-                  paused-partitions))
+  [{:keys [::assigned-partitions] :as consumer}
+   {:keys [results pause-assigned-partitions]}]
+  (if pause-assigned-partitions
+    @assigned-partitions
+    (->> results
+         (remove :status)
+         (map :topic-partition)
+         (set))))
 
 (defn get-partitions-to-resume
-  [results paused-partitions]
-  (->> results
-       (filter :status)
-       (map :topic-partition)
-       (set)
-       (set/intersection paused-partitions)))
+  [{:keys [::assigned-partitions]}
+   {:keys [results resume-assigned-partitions]}]
+  (if resume-assigned-partitions
+    @assigned-partitions
+    (->> results
+         (filter :status)
+         (map :topic-partition)
+         (set))))
 
 (defn get-paused-partitions
   [paused-partitions partitions-to-resume new-paused-partitions]
@@ -468,9 +471,10 @@
                     consumer topic-partitions)))
 
 (defn- trace-poll-loop-iteration-params
-  [{:keys [::pending-records ::paused-partitions ::last-commit-timestamp] :as consumer}]
+  [{:keys [::pending-records
+           ::last-commit-timestamp] :as consumer}]
   (let [params {:pending-records-count (count @pending-records)
-                :paused-partitions @paused-partitions
+                :paused-partitions (.paused (::kafka-consumer consumer))
                 :last-commit-timestamp (or @last-commit-timestamp :never)}]
     (log/tracef "[%s] poll loop iteration params: %s" (::group-id consumer) (pr-str params))))
 
@@ -478,15 +482,15 @@
   [{:keys [::consume-fn] :as consumer}]
   (while true
     (trace-poll-loop-iteration-params consumer)
-    (let [paused-partitions @(::paused-partitions consumer)
-          records (poll consumer)
+    (let [records (poll consumer)
           results (consume-fn records)]
-      (let [partitions-to-pause (get-partitions-to-pause results paused-partitions)
-            partitions-to-resume (get-partitions-to-resume results paused-partitions)]
+      (let [partitions-to-pause
+            (get-partitions-to-pause consumer results)
+            partitions-to-resume
+            (get-partitions-to-resume consumer results)]
         (update-consumer-state!
           consumer
           (get-new-offsets results)
-          (get-paused-partitions paused-partitions partitions-to-resume partitions-to-pause)
           (get-pending-records results))
         (pause-partitions! consumer partitions-to-pause)
         (resume-partitions! consumer partitions-to-resume)
@@ -537,7 +541,7 @@
     (onPartitionsAssigned [this topic-partitions]
       (let [topic-partitions (mapv TopicPartition->map topic-partitions)]
         (init-consumer-state! consumer)
-        (reset-assigned-partitions! consumer topic-partitions)
+        (reset-assigned-partitions! consumer (into #{} topic-partitions))
         (notify-tracers tracer/IOnPartitionsAssigned
                         tracer/on-partitions-assigned
                         consumer topic-partitions)))))
@@ -598,7 +602,7 @@
                              ::current-offsets (atom {})
                              ::pending-records (atom [])
                              ::paused-partitions (atom #{})
-                             ::assigned-partitions (atom [])
+                             ::assigned-partitions (atom #{})
                              ::last-commit-timestamp (atom nil))
                   ;; make-transform-record-fn needs ::optional-config key in consumer
                   consumer (assoc consumer

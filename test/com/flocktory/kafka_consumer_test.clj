@@ -70,13 +70,8 @@
                                                           :partition 0
                                                           :offset 11}])]]
     (is (= #{{:topic "topic2"
-              :partition 0}} (kafka-consumer/get-partitions-to-pause results #{}))
+              :partition 0}} (kafka-consumer/get-partitions-to-pause nil {:results results}))
         "Should pause partition in case of failure")
-
-    (let [already-paused-partitions #{{:topic "topic2"
-                                       :partition 0}}]
-      (is (= #{} (kafka-consumer/get-partitions-to-pause results already-paused-partitions))
-          "Should not pause already paused partitions"))
 
     (is (= #{} (kafka-consumer/get-partitions-to-resume results #{}))
         "Nothing to resume if no paused partitions")
@@ -87,7 +82,7 @@
                                        :partition 1}}]
       (is (= #{{:topic "topic1"
                 :partition 0}}
-             (kafka-consumer/get-partitions-to-resume results already-paused-partitions))
+             (kafka-consumer/get-partitions-to-resume nil {:results results}))
           "Should resume paused partition in case of recover"))))
 
 (defrecord partition-consumer []
@@ -123,10 +118,6 @@
 
     (kafka-consumer/update-consumer-state!
       partition-consumer (kafka-consumer/get-new-offsets results)
-      (kafka-consumer/get-paused-partitions
-        paused-partitions
-        (kafka-consumer/get-partitions-to-resume results paused-partitions)
-        (kafka-consumer/get-partitions-to-pause results paused-partitions))
       (kafka-consumer/get-pending-records results))
 
     (is (= {{:topic "topic1"
@@ -137,7 +128,6 @@
              :partition 0} 0}
            @(::kafka-consumer/current-offsets partition-consumer)))
 
-    (is (= #{} @(::kafka-consumer/paused-partitions partition-consumer)))
     (is (= [] @(::kafka-consumer/pending-records partition-consumer)))))
 
 (defrecord manual-partition-consumer [consume-partition-fn]
@@ -199,16 +189,27 @@
                             (->> records
                                  (group-by (juxt :topic :partition))
                                  (vals)
-                                 (map last))})
+                                 (map last))
+                            ::kafka-consumer/resume-assigned-partitions true})
                          (->manual-consumer))
+            assigned-partitions #{{:topic "topic1"
+                                   :partition 0}
+                                  {:topic "topic2"
+                                   :partition 0}
+                                  {:topic "some-topic"
+                                   :partition 10}}
+            consumer (assoc consumer
+                       ::kafka-consumer/assigned-partitions
+                       (atom assigned-partitions))
             consume-fn (kafka-consumer/make-consume-fn consumer)
             results (consume-fn [record1 record2 record3])]
-
         (is (= {{:topic "topic1"
                  :partition 0} (inc (:offset record2))
                 {:topic "topic2"
                  :partition 0} (inc (:offset record3))}
-               (kafka-consumer/get-new-offsets results)))))
+               (kafka-consumer/get-new-offsets results)))
+        (is (= assigned-partitions
+               (kafka-consumer/get-partitions-to-resume consumer results)))))
     (testing "has failed records"
       (let [consumer (-> (fn [this records]
                            {::kafka-consumer/failed-records
@@ -218,8 +219,18 @@
                                          :offset -1}])
                                  (group-by (juxt :topic :partition))
                                  (vals)
-                                 (map first))})
+                                 (map first))
+                            ::kafka-consumer/pause-assigned-partitions true})
                          (->manual-consumer))
+            assigned-partitions #{{:topic "topic1"
+                                   :partition 0}
+                                  {:topic "topic2"
+                                   :partition 0}
+                                  {:topic "some-topic"
+                                   :partition 10}}
+            consumer (assoc consumer
+                       ::kafka-consumer/assigned-partitions
+                       (atom assigned-partitions))
             consume-fn (kafka-consumer/make-consume-fn consumer)
             results (consume-fn [record1 record2 record3])]
         (is (= {{:topic "topic1"
@@ -227,11 +238,8 @@
                 {:topic "topic2"
                  :partition 0} (:offset record3)}
                (kafka-consumer/get-new-offsets results)))
-        (is (= #{{:topic "topic1"
-                  :partition 0}
-                 {:topic "topic2"
-                  :partition 0}}
-               (kafka-consumer/get-partitions-to-pause results #{})))))
+        (is (= assigned-partitions
+               (kafka-consumer/get-partitions-to-pause consumer results)))))
     (testing "if nothing to commit"
       (let [consumer (-> (fn [this records]
                            :nothing-to-commit)
