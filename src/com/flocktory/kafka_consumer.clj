@@ -394,9 +394,11 @@
         (notify-tracers tracer/IAfterConsume
                         tracer/after-consume
                         consumer records-count)
-        (->> result
-             ::commit-records
-             (map partition-process-success))))))
+        (if-let [failed-records (::failed-records result)]
+          (map (partial partition-process-result false) failed-records)
+          (->> result
+               ::commit-records
+               (map partition-process-success)))))))
 
 (defn make-consume-fn
   ;;todo: validate consumer keys
@@ -619,7 +621,8 @@
                 (or (satisfies? consumer-protocol/IConsumer %)
                     (satisfies? consumer-protocol/IRecordConsumer %)
                     (satisfies? consumer-protocol/IPartitionConsumer %)
-                    (satisfies? manual-consumer-protocol/IPartitionConsumer %))) coll))
+                    (satisfies? manual-consumer-protocol/IPartitionConsumer %)
+                    (satisfies? manual-consumer-protocol/IConsumer %))) coll))
 
 (defn start-consumers
   [bootstrap-servers consumers]

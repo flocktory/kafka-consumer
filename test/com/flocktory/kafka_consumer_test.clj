@@ -209,6 +209,29 @@
                 {:topic "topic2"
                  :partition 0} (inc (:offset record3))}
                (kafka-consumer/get-new-offsets results)))))
+    (testing "has failed records"
+      (let [consumer (-> (fn [this records]
+                           {::kafka-consumer/failed-records
+                            (->> records
+                                 (into [{:topic "topic1"
+                                         :partition 0
+                                         :offset -1}])
+                                 (group-by (juxt :topic :partition))
+                                 (vals)
+                                 (map first))})
+                         (->manual-consumer))
+            consume-fn (kafka-consumer/make-consume-fn consumer)
+            results (consume-fn [record1 record2 record3])]
+        (is (= {{:topic "topic1"
+                 :partition 0} -1
+                {:topic "topic2"
+                 :partition 0} (:offset record3)}
+               (kafka-consumer/get-new-offsets results)))
+        (is (= #{{:topic "topic1"
+                  :partition 0}
+                 {:topic "topic2"
+                  :partition 0}}
+               (kafka-consumer/get-partitions-to-pause results #{})))))
     (testing "if nothing to commit"
       (let [consumer (-> (fn [this records]
                            :nothing-to-commit)
