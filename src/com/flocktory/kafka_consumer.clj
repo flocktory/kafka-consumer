@@ -6,13 +6,11 @@
             [clojure.tools.logging :as log]
             [com.climate.claypoole :as cp]
             [clojure.set :as set]
-            [cheshire.core :as json]
-            [clojure.string :as str])
-  (:import (org.apache.kafka.clients.consumer ConsumerConfig KafkaConsumer OffsetAndMetadata ConsumerRebalanceListener ConsumerRecord OffsetAndTimestamp ConsumerRecords)
+            [cheshire.core :as json])
+  (:import (org.apache.kafka.clients.consumer ConsumerConfig KafkaConsumer OffsetAndMetadata ConsumerRebalanceListener ConsumerRecord ConsumerRecords)
            (org.apache.kafka.common TopicPartition PartitionInfo)
            (java.util.concurrent Executors ExecutorService TimeUnit)
-           (org.apache.kafka.common.errors WakeupException)
-           (com.fasterxml.jackson.core JsonParseException)))
+           (org.apache.kafka.common.errors WakeupException)))
 
 (defn- group-id
   [consumer]
@@ -471,12 +469,12 @@
                     consumer topic-partitions)))
 
 (defn- trace-poll-loop-iteration-params
-  [{:keys [::pending-records
-           ::last-commit-timestamp] :as consumer}]
-  (let [params {:pending-records-count (count @pending-records)
-                :paused-partitions (.paused (::kafka-consumer consumer))
-                :last-commit-timestamp (or @last-commit-timestamp :never)}]
-    (log/tracef "[%s] poll loop iteration params: %s" (::group-id consumer) (pr-str params))))
+  [{:keys [::pending-records ::last-commit-timestamp] :as consumer}]
+  (log/tracef "[%s] poll loop iteration params: %s"
+              (::group-id consumer)
+              (pr-str {:pending-records-count (count @pending-records)
+                       :paused-partitions (.paused (::kafka-consumer consumer))
+                       :last-commit-timestamp (or @last-commit-timestamp :never)})))
 
 (defn poll-loop
   [{:keys [::consume-fn] :as consumer}]
