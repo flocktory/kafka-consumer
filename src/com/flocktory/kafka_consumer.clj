@@ -43,8 +43,48 @@
   [protocol consumer]
   (filter #(satisfies? protocol %) (vals consumer)))
 
+(defn tracer-protocols
+  [consumer]
+  (let [protocols #{tracer/ITracerName
+                    tracer/IOnConsumerStart
+                    tracer/IOnConsumerStop
+                    tracer/IOnConsumerFail
+                    tracer/IOnConsumerFailLoop
+                    tracer/IBeforePoll
+                    tracer/IAfterPoll
+                    tracer/IBeforeConsume
+                    tracer/IAfterConsume
+                    tracer/IOnConsumeError
+                    tracer/IBeforeConsumePartition
+                    tracer/IAfterConsumePartition
+                    tracer/IOnConsumePartitionError
+                    tracer/IBeforeConsumeRecord
+                    tracer/IAfterConsumeRecord
+                    tracer/IOnConsumeRecordError
+                    tracer/IBeforeCommit
+                    tracer/IAfterCommit
+                    tracer/IOnPartitionsAssigned
+                    tracer/IOnPartitionsRevoked
+                    tracer/IBeforePartitionsPaused
+                    tracer/IAfterPartitionsPaused
+                    tracer/IBeforePartitionsResumed
+                    tracer/IAfterPartitionsResumed
+                    tracer/IBeforeEndOffsets
+                    tracer/IAfterEndOffsets
+                    tracer/IBeforeBeginningOffsets
+                    tracer/IAfterBeginningOffsets
+                    tracer/ICurrentOffsets}]
+    (reduce
+      (fn [out protocol]
+        (assoc out protocol
+                   (filter-by-protocol protocol consumer))) {} protocols)))
+
+(defn- tracer-protocol?
+  [protocol consumer]
+  (seq (get-in consumer [::tracer-protocols protocol])))
+
 (defn- notify-tracers [protocol protocol-fn consumer & args]
-  (let [tracers (filter-by-protocol protocol consumer)]
+  (let [tracers (get-in consumer [::tracer-protocols protocol])]
     (if (seq tracers)
       (doseq [tracer tracers]
         (apply protocol-fn tracer (::group-id consumer) args))
@@ -152,7 +192,7 @@
 
 (defn- end-offsets!
   [{:keys [::kafka-consumer] :as consumer} topic-partitions]
-  (when (seq (filter-by-protocol tracer/IAfterEndOffsets consumer))
+  (when (tracer-protocol? tracer/IAfterEndOffsets consumer)
     (notify-tracers tracer/IBeforeEndOffsets
                     tracer/before-end-offsets
                     consumer)
@@ -164,7 +204,7 @@
 
 (defn- beginning-offsets!
   [{:keys [::kafka-consumer] :as consumer} topic-partitions]
-  (when (seq (filter-by-protocol tracer/IAfterBeginningOffsets consumer))
+  (when (tracer-protocol? tracer/IAfterBeginningOffsets consumer)
     (notify-tracers tracer/IBeforeBeginningOffsets
                     tracer/before-beginning-offsets
                     consumer)
@@ -575,8 +615,7 @@
     (::kafka-consumer-config consumer)
     (config-protocol/topics consumer)
     (::optional-config consumer)
-    (->> consumer
-         (filter-by-protocol tracer/ITracerName)
+    (->> (get-in consumer [::tracer-protocols tracer/ITracerName])
          (mapv tracer/tracer-name)
          (pr-str))))
 
@@ -605,6 +644,8 @@
                   ;; make-transform-record-fn needs ::optional-config key in consumer
                   consumer (assoc consumer
                              ::transform-record-fn (make-transform-record-fn consumer))
+                  consumer (assoc consumer
+                             ::tracer-protocols (tracer-protocols consumer))
                   ;; make-consume-fn needs ::transform-fn key in consumer
                   consumer (assoc consumer
                              ::consume-fn (make-consume-fn consumer))]
