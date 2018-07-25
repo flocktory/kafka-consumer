@@ -87,7 +87,7 @@
   (let [tracers (get-in consumer [::tracer-protocols protocol])]
     (if (seq tracers)
       (doseq [tracer tracers]
-        (apply protocol-fn tracer (::group-id consumer) args))
+        (apply protocol-fn tracer (::group-id consumer) (::optional-config consumer) args))
       (log/trace "No tracers to notify"))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -352,35 +352,44 @@
                   (partition-process-fail records)
                   (partition-process-success (last records)))))))}))
 
+(defn- safe-consume-record-tracers
+  []
+  {:before-fn (partial notify-tracers
+                       tracer/IBeforeConsumeRecord
+                       tracer/before-consume-record)
+   :after-fn (partial notify-tracers
+                      tracer/IAfterConsumeRecord
+                      tracer/after-consume-record)
+   :on-error-fn (partial notify-tracers
+                         tracer/IOnConsumeRecordError
+                         tracer/on-consume-record-error)})
+
 (defn- safe-consume-record-fn
   [consumer]
-  (fn [records]
-    {:results
-     (->> records
-          (group-by-topic-partition)
-          (cp/pmap
-            :builtin
-            (fn [[topic-partition records]]
-              (loop [[record & rest-records :as records] records]
-                (let [result
-                      (try
-                        (notify-tracers tracer/IBeforeConsumeRecord
-                                        tracer/before-consume-record
-                                        consumer record)
-                        (consumer-protocol/consume-record (cleanup-deps consumer) record)
-                        (notify-tracers tracer/IAfterConsumeRecord
-                                        tracer/after-consume-record
-                                        consumer record)
-                        (catch Exception error
-                          (notify-tracers tracer/IOnConsumeRecordError
-                                          tracer/on-consume-record-error
-                                          consumer record error)
-                          error))]
-                  (if (instance? Throwable result)
-                    (partition-process-fail records)
-                    (if (and (seq rest-records) @(::running? consumer))
-                      (recur rest-records)
-                      (partition-process-success record))))))))}))
+  (let [{:keys [before-fn
+                after-fn
+                on-error-fn]} (safe-consume-record-tracers)]
+    (fn [records]
+      {:results
+       (->> records
+            (group-by-topic-partition)
+            (cp/pmap
+              :builtin
+              (fn [[topic-partition records]]
+                (loop [[record & rest-records :as records] records]
+                  (let [result
+                        (try
+                          (before-fn consumer record)
+                          (consumer-protocol/consume-record (cleanup-deps consumer) record)
+                          (after-fn consumer record)
+                          (catch Exception error
+                            (on-error-fn consumer record error)
+                            error))]
+                    (if (instance? Throwable result)
+                      (partition-process-fail records)
+                      (if (and (seq rest-records) @(::running? consumer))
+                        (recur rest-records)
+                        (partition-process-success record))))))))})))
 
 (defn- manual-consume-partition-fn
   [consumer]
@@ -438,7 +447,7 @@
                          (map partition-process-success))})))))
 
 (defn make-consume-fn
-  ;;todo: validate consumer keys
+  ;;todo: validate consumer keys?
   [consumer]
   (cond
     (satisfies? consumer-protocol/IConsumer consumer)
