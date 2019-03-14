@@ -9,7 +9,7 @@
             [cheshire.core :as json])
   (:import (org.apache.kafka.clients.consumer ConsumerConfig KafkaConsumer OffsetAndMetadata ConsumerRebalanceListener ConsumerRecord ConsumerRecords)
            (org.apache.kafka.common TopicPartition PartitionInfo)
-           (java.util.concurrent Executors ExecutorService TimeUnit)
+           (java.util.concurrent Executors ExecutorService TimeUnit ThreadPoolExecutor SynchronousQueue)
            (org.apache.kafka.common.errors WakeupException)))
 
 (defn- group-id
@@ -365,7 +365,7 @@
                          tracer/on-consume-record-error)})
 
 (defn- safe-consume-record-fn
-  [consumer]
+  [{:keys [::record-processing-pool] :as consumer}]
   (let [{:keys [before-fn
                 after-fn
                 on-error-fn]} (safe-consume-record-tracers)]
@@ -375,21 +375,24 @@
             (group-by-topic-partition)
             (cp/pmap
               :builtin
-              (fn [[topic-partition records]]
-                (loop [[record & rest-records :as records] records]
-                  (let [result
-                        (try
-                          (before-fn consumer record)
-                          (consumer-protocol/consume-record (cleanup-deps consumer) record)
-                          (after-fn consumer record)
-                          (catch Exception error
-                            (on-error-fn consumer record error)
-                            error))]
-                    (if (instance? Throwable result)
-                      (partition-process-fail records)
-                      (if (and (seq rest-records) @(::running? consumer))
-                        (recur rest-records)
-                        (partition-process-success record))))))))})))
+              (fn [[_ records]]
+
+                (let [result
+
+                      (cp/pmap
+                        record-processing-pool
+                        (fn [record]
+                          (try
+                            (before-fn consumer record)
+                            (consumer-protocol/consume-record (cleanup-deps consumer) record)
+                            (after-fn consumer record)
+                            (catch Exception error
+                              (on-error-fn consumer record error)
+                              error)))
+                        records)]
+                  (if (instance? Throwable result)
+                    (partition-process-fail records)
+                    (partition-process-success (last records)))))))})))
 
 (defn- manual-consume-partition-fn
   [consumer]
@@ -628,8 +631,17 @@
          (mapv tracer/tracer-name)
          (pr-str))))
 
+(defn- create-record-processing-pool
+  []
+  (ThreadPoolExecutor.
+    1
+    (* 2 (.availableProcessors (Runtime/getRuntime)))
+    60
+    TimeUnit/SECONDS
+    (SynchronousQueue.)))
+
 (defn create-consumer
-  [bootstrap-servers running? consumer]
+  [bootstrap-servers running? record-processing-pool consumer]
   (let [kafka-consumer-config (get-kafka-consumer-config consumer bootstrap-servers)
         kafka-consumer (KafkaConsumer. kafka-consumer-config)
         optional-config (if (satisfies? config-protocol/IOptionalConfig consumer)
@@ -644,6 +656,7 @@
                              ::kafka-consumer kafka-consumer
                              ::kafka-consumer-config kafka-consumer-config
                              ::optional-config optional-config
+                             ::record-processing-pool record-processing-pool
                              ::running? running?
                              ::current-offsets (atom {})
                              ::pending-records (atom [])
@@ -679,14 +692,15 @@
 (defn start-consumers
   [bootstrap-servers consumers]
   (let [running? (atom true)
-        consumers (map (partial create-consumer bootstrap-servers running?) consumers)
-        thread-pool (Executors/newCachedThreadPool)]
+        record-thread-pool (create-record-processing-pool)
+        consumers (map (partial create-consumer bootstrap-servers running? record-thread-pool) consumers)
+        partition-thread-pool (Executors/newCachedThreadPool)]
     (doseq [^Runnable consumer-thread-fn (map :consumer-thread-fn consumers)]
-      (.submit thread-pool consumer-thread-fn))
+      (.submit partition-thread-pool consumer-thread-fn))
     (log/info "Started kafka-system")
     {:running? running?
      :kafka-consumers (map :kafka-consumer consumers)
-     :consumers-thread-pool thread-pool}))
+     :consumers-thread-pool partition-thread-pool}))
 
 (defn stop-consumers
   [kafka-system]
