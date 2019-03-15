@@ -3,7 +3,7 @@
 (cemerick.pomegranate.aether/register-wagon-factory!
   "http" #(org.apache.maven.wagon.providers.http.HttpWagon.))
 
-(defproject com.flocktory/kafka-consumer "0.0.9-DEV4-SNAPSHOT"
+(defproject com.flocktory/kafka-consumer "0.0.9-DEV9-SNAPSHOT"
   :description "High level kafka consumer in clojure"
   :url "https://github.com/flocktory/kafka-consumer"
   :license {:name "Eclipse Public License"

@@ -9,7 +9,7 @@
             [cheshire.core :as json])
   (:import (org.apache.kafka.clients.consumer ConsumerConfig KafkaConsumer OffsetAndMetadata ConsumerRebalanceListener ConsumerRecord ConsumerRecords)
            (org.apache.kafka.common TopicPartition PartitionInfo)
-           (java.util.concurrent Executors ExecutorService TimeUnit ThreadPoolExecutor SynchronousQueue)
+           (java.util.concurrent Executors ExecutorService TimeUnit)
            (org.apache.kafka.common.errors WakeupException)))
 
 (defn- group-id
@@ -376,9 +376,7 @@
             (cp/pmap
               :builtin
               (fn [[_ records]]
-
                 (let [result
-
                       (cp/pmap
                         record-processing-pool
                         (fn [record]
@@ -390,6 +388,7 @@
                               (on-error-fn consumer record error)
                               error)))
                         records)]
+                  (doall result)
                   (if (instance? Throwable result)
                     (partition-process-fail records)
                     (partition-process-success (last records)))))))})))
@@ -631,14 +630,22 @@
          (mapv tracer/tracer-name)
          (pr-str))))
 
+
 (defn- create-record-processing-pool
   []
-  (ThreadPoolExecutor.
-    1
-    (* 2 (.availableProcessors (Runtime/getRuntime)))
-    60
-    TimeUnit/SECONDS
-    (SynchronousQueue.)))
+  (Executors/newFixedThreadPool 64))
+
+;(defn- create-record-processing-pool
+;  []
+;  (let [tpe (ThreadPoolExecutor.
+;    1
+;    64
+;    60
+;    TimeUnit/SECONDS
+;    (ArrayBlockingQueue. 4) ;; the queue size should probably depend on max_poll_size
+;    (ThreadPoolExecutor$CallerRunsPolicy.))]
+;    (.allowCoreThreadTimeOut(true) tpe)
+;    tpe))
 
 (defn create-consumer
   [bootstrap-servers running? record-processing-pool consumer]
