@@ -39,6 +39,9 @@
     :value-format - available formats to decode record value from (:json), no decoding if nil
     :poll-timeout-ms - kafka poll timeout
     :min-commit-interval-ms - minimal interval between commits
+    :fail-fast? - use fail-fast mode (shutdown (system/exit 1) when kafka poll errors)
+    :fail-loop? - use fail-loop mode (eternal loop without processing messages)
+    :fail-budget - max errors count (only for fail-fast mode)
 
     Example: {:poll-timeout-ms 1000
               :value-format nil}
@@ -50,5 +53,7 @@
    :min-commit-interval-ms 5000
    :value-format :json
    :key-format nil
-   :fail-loop? true
+   :fail-fast? true
+   :fail-budget 3
+   :fail-loop? false
    :fail-loop-sleep-ms 5000})

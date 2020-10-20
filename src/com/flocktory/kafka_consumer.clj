@@ -50,6 +50,8 @@
                     tracer/IOnConsumerStop
                     tracer/IOnConsumerFail
                     tracer/IOnConsumerFailLoop
+                    tracer/IOnConsumerFailFast
+                    tracer/IOnConsumerIncError
                     tracer/IBeforePoll
                     tracer/IAfterPoll
                     tracer/IBeforeConsume
@@ -554,6 +556,25 @@
   [^PartitionInfo partition-info]
   (TopicPartition. (.topic partition-info) (.partition partition-info)))
 
+(defn- fail
+  [{:keys [::errors-count] :as consumer}]
+  (notify-tracers tracer/IOnConsumerFailFast
+                  tracer/on-consumer-fail-fast
+                  consumer)
+  (System/exit 1))
+
+(defn- inc-errors
+  [{:keys [::errors-count] :as consumer} error]
+  (notify-tracers tracer/IOnConsumerIncError
+                  tracer/on-consumer-inc-error
+                  consumer
+                  error)
+  (swap! errors-count inc))
+
+(defn- too-many-errors?
+  [{:keys [::errors-count ::optional-config]}]
+  (>= @errors-count (:fail-budget optional-config)))
+
 (defn- consumer-fail-loop
   [{:keys [::running?
            ::kafka-consumer
@@ -593,20 +614,42 @@
                         tracer/on-partitions-assigned
                         consumer topic-partitions)))))
 
+(defn- fail-fast-mode
+  [consumer]
+  (while (not (too-many-errors? consumer))
+    (try
+      (poll-loop consumer)
+      (catch WakeupException wakeup
+        (throw wakeup))
+      (catch Throwable error
+        (inc-errors consumer error)
+        (when (too-many-errors? consumer)
+          (fail consumer))))))
+
+(defn- fail-loop-mode
+  [consumer]
+  (try
+    (poll-loop consumer)
+    (catch WakeupException wakeup
+      (throw wakeup))
+    (catch Throwable t
+      (notify-tracers tracer/IOnConsumerFail
+                      tracer/on-consumer-fail
+                      consumer
+                      t)
+      (consumer-fail-loop consumer))))
+
 (defn start-consumer-thread
-  [{:keys [::kafka-consumer] :as consumer}]
+  [{:keys [::kafka-consumer ::optional-config] :as consumer}]
   (notify-tracers tracer/IOnConsumerStart tracer/on-consumer-start consumer)
   (let [rebalance-listener (create-rebalance-listener consumer)]
     (.subscribe kafka-consumer (config-protocol/topics consumer) rebalance-listener)
     (try
-      (poll-loop consumer)
+      (if (:fail-fast? optional-config)
+        (fail-fast-mode consumer)
+        (fail-loop-mode consumer))
       (catch WakeupException ignore-for-shutdown
         (log/debugf "[%s] WakeupException is ignored for consumer shutdown" (::group-id consumer)))
-      (catch Throwable t
-        (notify-tracers tracer/IOnConsumerFail
-                        tracer/on-consumer-fail
-                        consumer t)
-        (consumer-fail-loop consumer))
       (finally
         (try
           (commit-sync! consumer)
@@ -628,6 +671,12 @@
          (mapv tracer/tracer-name)
          (pr-str))))
 
+(defn validate-optional-config
+  [optional-config]
+  (when (and (:fail-fast? optional-config)
+             (:fail-loop? optional-config))
+    (throw (ex-info "Conflict between two values (fail-fast? and fail-loop?): only one might be 'true'" {}))))
+
 (defn create-consumer
   [bootstrap-servers running? consumer]
   (let [kafka-consumer-config (get-kafka-consumer-config consumer bootstrap-servers)
@@ -645,6 +694,7 @@
                              ::kafka-consumer-config kafka-consumer-config
                              ::optional-config optional-config
                              ::running? running?
+                             ::errors-count (atom 0)
                              ::current-offsets (atom {})
                              ::pending-records (atom [])
                              ::paused-partitions (atom #{})
@@ -663,6 +713,7 @@
             (catch Throwable t
               (log/error t "Error in consumer thread")
               (throw t))))]
+    (validate-optional-config optional-config)
     {:kafka-consumer kafka-consumer
      :consumer-thread-fn start-fn}))
 

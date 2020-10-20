@@ -15,6 +15,12 @@
 (defprotocol IOnConsumerFailLoop
   (on-consumer-fail-loop [this group-id opts failed-ago]))
 
+(defprotocol IOnConsumerIncError
+  (on-consumer-inc-error [this group-id opts error]))
+
+(defprotocol IOnConsumerFailFast
+  (on-consumer-fail-fast [this group-id opts]))
+
 (defprotocol IBeforePoll
   (before-poll [this group-id opts]))
 

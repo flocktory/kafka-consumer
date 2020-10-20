@@ -1,4 +1,4 @@
-(defproject com.flocktory/kafka-consumer "0.0.8"
+(defproject com.flocktory/kafka-consumer "0.0.9"
   :description "High level kafka consumer in clojure"
   :url "https://github.com/flocktory/kafka-consumer"
   :license {:name "Eclipse Public License"
