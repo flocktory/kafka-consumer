@@ -557,11 +557,11 @@
   (TopicPartition. (.topic partition-info) (.partition partition-info)))
 
 (defn- fail
-  [{:keys [::errors-count] :as consumer}]
+  [{:keys [::errors-count] :as consumer} fail-fast-fn]
   (notify-tracers tracer/IOnConsumerFailFast
                   tracer/on-consumer-fail-fast
                   consumer)
-  (System/exit 1))
+  (fail-fast-fn))
 
 (defn- inc-errors
   [{:keys [::errors-count] :as consumer} error]
@@ -615,7 +615,7 @@
                         consumer topic-partitions)))))
 
 (defn- fail-fast-mode
-  [consumer]
+  [consumer fail-fast-fn]
   (while (not (too-many-errors? consumer))
     (try
       (poll-loop consumer)
@@ -624,7 +624,7 @@
       (catch Throwable error
         (inc-errors consumer error)
         (when (too-many-errors? consumer)
-          (fail consumer))))))
+          (fail consumer fail-fast-fn))))))
 
 (defn- fail-loop-mode
   [consumer]
@@ -646,7 +646,7 @@
     (.subscribe kafka-consumer (config-protocol/topics consumer) rebalance-listener)
     (try
       (if (:fail-fast? optional-config)
-        (fail-fast-mode consumer)
+        (fail-fast-mode consumer (:fail-fast-fn optional-config))
         (fail-loop-mode consumer))
       (catch WakeupException ignore-for-shutdown
         (log/debugf "[%s] WakeupException is ignored for consumer shutdown" (::group-id consumer)))

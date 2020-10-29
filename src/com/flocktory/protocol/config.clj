@@ -42,6 +42,7 @@
     :fail-fast? - use fail-fast mode (shutdown (system/exit 1) when kafka poll errors)
     :fail-loop? - use fail-loop mode (eternal loop without processing messages)
     :fail-budget - max errors count (only for fail-fast mode)
+    :fail-fast-fn - fail fast callback
 
     Example: {:poll-timeout-ms 1000
               :value-format nil}
@@ -55,5 +56,6 @@
    :key-format nil
    :fail-fast? true
    :fail-budget 3
+   :fail-fast-fn #(throw (ex-info "Fatal error!" {:ex %}))
    :fail-loop? false
    :fail-loop-sleep-ms 5000})
